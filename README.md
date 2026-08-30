@@ -1,5 +1,5 @@
 
-# Perfectoid Kernel Search
+# Approximations of elements of a perfectoid ideal
 
   
 
@@ -195,7 +195,7 @@ Enter initial root index n >= 1: 1
 
   
 
-The script builds a `FiniteLevel` object for the chosen $(M, L)$. This creates the finite-level quotient rings and the matrices used in the kernel search.
+The script builds a `FiniteLevel` object for the chosen $(M, L)$. This creates the finite-level quotient rings and the matrices used in the search.
 
   
 
@@ -207,11 +207,11 @@ It also initializes the evaluation matrix $E$ and the Frobenius matrix $F$.
 
   
 
-Before doing a fresh search, the script checks whether an exact-level root tower is already available in the cache directory.
+Before doing a fresh search, the script checks whether a previously computed result is already available in the cache directory.
 
   
 
-If the exact level is already cached, the user sees a choice like:
+If so, the user sees a choice like:
 
   
 
@@ -223,7 +223,7 @@ If the exact level is already cached, the user sees a choice like:
 
   
 
-This is intentional: the cache stores a concrete root tower for that exact level, not necessarily the full affine family of all solutions at that level.
+The cache stores one concrete root tower for the current level, not the full affine family of all solutions at that level.
 
   
 
@@ -349,43 +349,7 @@ It is a reuse mechanism for exact finite-level computations.
 
 ---
 
-  
 
-## Display conventions
-
-  
-
-The program displays roots in the readable $(e,t)$ notation, usually with strings such as:
-
-  
-
-```text
-
-x_1 in (e,t) = t^(1/2)-1
-
-```
-
-  
-
-or more complicated sums involving terms like:
-
-  
-
-- $e^{1/2}$
-
-- $t^{1/4}-1$
-
-- powers of $(t^{1/8}-1)$
-
-  
-
-When a root is printed together with its predecessors, the script shows a descent description from deeper roots to earlier ones. This reflects the Frobenius-descending tower structure.
-
-  
-
----
-
-  
 
 ## Level enlargement and retry logic
 
@@ -412,8 +376,7 @@ Available actions are:
 After enlargement, the previous tower is lifted to the new level and verified before continuing the search.
 
   
-
-This is an important part of the interactive workflow: the user can dynamically increase the finite approximation until a root becomes visible.
+The user can dynamically increase the finite approximation until a root becomes visible.
 
   
 
@@ -429,15 +392,14 @@ This is an important part of the interactive workflow: the user can dynamically 
 
   
 
-The script does not save a full session state and resume later from it. Instead, it saves exact-level computations and root towers so that repeated work can be avoided without losing interactive control.
-
+The script does not save a full session state and resume later from it. Instead, it saves exact-level computations and root towers so that repeated work can be avoided.
   
 
 ### The root tower is a coherent sequence
 
   
 
-When a solution is found, the program reconstructs the earlier roots by applying the Frobenius and verifies that they fit together.
+When a solution is found, the program reconstructs the earlier roots by applying the Frobenius.
 
   
 
@@ -515,7 +477,6 @@ A typical run looks like this:
 
 - Start with small values of $p$, $M$, and $L$.
 - The situation is exponential. With usual computers memory will crash almost certainly once the computation are too large. 
-
 - Keep the cache directory in mind when experimenting: reusing exact-level matrices can save substantial time.
   
 
