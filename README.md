@@ -49,9 +49,8 @@ with the identification
 
 In the displayed solutions, $e$ is used to denote $\zeta_p-1$, and more precisely $e^{1/p^k}$ is the class of $\zeta_p^{1/p^{k+1}}-1$.
 
-  
 
-The program defines an evaluation map $E : A \to B^N$, where $N = p^M$, by evaluating a polynomial in $Y$ at the points
+The program defines an evaluation map $E : A_{L,M} \to B_{L}^N$, where $N = p^M$, by evaluating a polynomial in $Y$ at the points
 
 $(1+u)^i - 1, \quad i = 0, \ldots, N-1,$
 
