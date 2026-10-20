@@ -30,8 +30,10 @@ The user can increase the finite level (M, L) as needed to find a solution.
 When the user inputs n >= 1, the search looks for an element x_n such that
 
     E(x_n) = 0, (In the kernel)
-    x_n^(p^n) = 0, (a root of t-1)
     x_n = Y^(p^(M-n)) mod (a^(p^(L-n))), (The correct root level.)
+
+The congruence implies x_n^(p^n) = 0 in characteristic p, since
+Y^(p^M) = a^(p^L) = 0, so nilpotence needs no separate equation.
 
 If the search is successful, the user sees a solution and may display other ones if desired. From this solution, one can then "reuse" it.
 
@@ -308,7 +310,6 @@ class FiniteLevel:
         else:
             print("Loaded cached Frobenius matrix.", flush=True)
 
-        self.base_system_matrix = self.E_matrix.stack(self.F_matrix)
         self._reduction_matrices = {}
         self._frobenius_powers = {1: self.F_matrix}
 
@@ -384,8 +385,10 @@ class FiniteLevel:
         Return the affine family of x_depth satisfying
 
             E(x_depth) = 0,
-            x_depth^(p^depth) = 0,
             x_depth = Y^(p^(M-depth)) mod a^(p^(L-depth)).
+
+        The congruence implies x_depth^(p^depth) = 0; the validator
+        checks this consequence without adding redundant linear equations.
         """
         depth = Integer(depth)
         if depth < 1:
@@ -393,15 +396,12 @@ class FiniteLevel:
         if self.M < depth or self.L < depth:
             return None
 
-        iterated_F = self.iterated_frobenius_matrix(depth)
         reduction_matrix = self.reduction_matrix(depth)
         rhs_E = vector(self.F, self.E_matrix.nrows())
-        rhs_F = vector(self.F, self.F_matrix.nrows())
         rhs_congruence = self.reduction_target(depth)
-        rhs = vector(self.F, list(rhs_E) + list(rhs_F) + list(rhs_congruence))
+        rhs = vector(self.F, list(rhs_E) + list(rhs_congruence))
 
-        system_matrix = self.E_matrix.stack(iterated_F)
-        system_matrix = system_matrix.stack(reduction_matrix)
+        system_matrix = self.E_matrix.stack(reduction_matrix)
 
         try:
             solution = system_matrix.solve_right(rhs)

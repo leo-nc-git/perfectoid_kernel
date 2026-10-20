@@ -100,8 +100,6 @@ In rough terms, the code looks for an element $x_n$ such that:
 
 - $E(x_n) = 0$
 
-- $x_n^{p^n} = 0$ 
-
 - $x_n = Y^{p^{M-n}} \bmod a^{p^{L-n}}$ 
 
   
