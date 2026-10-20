@@ -3,7 +3,7 @@
 
   
 
-This project is a SageMath script for searching approximations of elements in $(t-1)_\text{pfd}$, that are congruent to elements of the form $t^{1/p^k}-1$.
+This project is a SageMath script for searching approximations of elements in $(t-1)_\text{pfd}$, that are congruent to elements of the form $t^{1/p^k}-1$. It was written with the help of GitHub copilot and GPT Sol 5.5.
 
   
 
