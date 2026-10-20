@@ -40,12 +40,123 @@ If the search is successful, the user sees a solution and may display other ones
 Inputting a new jump depth s allows the search for a new x_(s+n) from a previous x_n by imposing the following conditions on x_(s+n):
 
     E(x_(s+n)) = 0,
-    x_(s+n)^(p^n) = x_s,
+    x_(s+n)^(p^s) = x_n,
     x_(s+n) = Y^(p^(M-s-n)) mod (a^(p^(L-s-n))).
 """
 
 import os
+import hashlib
+import json
+import pickle
+import sys
+import tempfile
+import zlib
 from random import randrange
+from sage.matrix.matrix0 import Matrix
+
+
+# Sage's Python CLI leaves __file__ pointing at sage.all. Its argv still names
+# the original script, even when the preparsed code lives in a temporary file.
+_script_path = sys.argv[0] if __name__ in ("__main__", "sage.all") else __file__
+PUBLIC_CACHE_DIRECTORY = os.path.join(os.path.dirname(os.path.realpath(_script_path)), "public-cache")
+PUBLIC_CACHE_FORMAT_VERSION = 1
+MATRIX_BASIS_ORDER = "a^i*Y^j; index=j*p^L+i"
+
+
+def public_cache_directory():
+    return os.environ.get("KERNEL_ELEMENTS_PUBLIC_CACHE_DIR", PUBLIC_CACHE_DIRECTORY)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def load_public_cached_object(filename, expected_metadata):
+    """Read a checksummed public object, assembling chunks only in temporary space."""
+    directory = public_cache_directory()
+    manifest_path = os.path.join(directory, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        return None
+    try:
+        with open(manifest_path) as stream:
+            manifest = json.load(stream)
+        if (manifest.get("format_version") != PUBLIC_CACHE_FORMAT_VERSION
+                or manifest.get("basis_order") != MATRIX_BASIS_ORDER):
+            raise ValueError("unsupported public-cache format or basis order")
+        entry = manifest["matrices"].get(filename)
+        if entry is None:
+            return None
+        if any(entry.get(key) != value for key, value in expected_metadata.items()):
+            raise ValueError("matrix metadata does not match the requested level")
+        parts = entry["parts"]
+        if not isinstance(parts, list) or not parts:
+            raise ValueError("missing matrix parts")
+        for index, part in enumerate(parts):
+            expected_name = filename if len(parts) == 1 else "%s.part%04d" % (filename, index)
+            if part["filename"] != expected_name:
+                raise ValueError("unexpected matrix part filename")
+            path = os.path.join(directory, part["filename"])
+            if (os.path.getsize(path) != part["size_bytes"]
+                    or file_sha256(path) != part["sha256"]):
+                raise ValueError("matrix part failed its size or checksum check")
+        if sum(part["size_bytes"] for part in parts) != entry["size_bytes"]:
+            raise ValueError("matrix parts have the wrong total size")
+        if len(parts) == 1:
+            if parts[0]["sha256"] != entry["sha256"]:
+                raise ValueError("matrix checksum does not match its part")
+            return load_cached_object(os.path.join(directory, parts[0]["filename"]))
+        with tempfile.TemporaryDirectory(prefix="kernel-public-") as temporary_directory:
+            combined_path = os.path.join(temporary_directory, filename)
+            digest = hashlib.sha256()
+            with open(combined_path, "wb") as target:
+                for part in parts:
+                    with open(os.path.join(directory, part["filename"]), "rb") as source:
+                        for block in iter(lambda: source.read(1024 * 1024), b""):
+                            target.write(block)
+                            digest.update(block)
+            if digest.hexdigest() != entry["sha256"]:
+                raise ValueError("assembled matrix failed its checksum check")
+            return load_cached_object(combined_path)
+    except (OSError, ValueError, TypeError, AttributeError, KeyError) as error:
+        print("Ignoring public cache entry %s: %s" % (filename, error))
+        return None
+
+
+def local_cache_path(filename):
+    """Resolve a local cache filename without creating directories on reads."""
+    return os.path.join(os.environ.get("KERNEL_ELEMENTS_CACHE_DIR", ".sage-cache"), filename)
+
+
+def load_cached_object(path):
+    """Unreadable local cache entries are misses, so they can be rebuilt."""
+    if not os.path.exists(path):
+        return None
+    try:
+        return load(path)
+    except (OSError, EOFError, ValueError, TypeError, AttributeError,
+            ImportError, RuntimeError, pickle.UnpicklingError, zlib.error):
+        print("Ignoring unreadable cache entry %s." % path)
+        return None
+
+
+def atomic_save(obj, path):
+    """Replace a cache entry only after its complete Sage object is written."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    descriptor, temporary_path = tempfile.mkstemp(prefix=".kernel-", suffix=".sobj", dir=directory)
+    os.close(descriptor)
+    try:
+        save(obj, temporary_path)
+        with open(temporary_path, "rb") as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.unlink(temporary_path)
 
 
 class AffineSolutionFamily:
@@ -155,12 +266,6 @@ class FiniteLevel:
             (1 + self.u) ** i - 1 for i in range(self.N)
         ]
 
-        self.basis_A = [
-            self.A(self.a ** i) * self.Y ** j
-            for j in range(self.N)
-            for i in range(self.dim_B)
-        ]
-
         print("\nBuilding finite level (M, L) =", (self.M, self.L))
         print("Dimension over F_p:", self.dim_A)
         self._build_matrices()
@@ -203,56 +308,59 @@ class FiniteLevel:
         return vector(self.F, entries)
 
     def _matrix_cache_path(self, name):
-        cache_directory = os.environ.get("KERNEL_ELEMENTS_CACHE_DIR", ".sage-cache")
-        if not os.path.isdir(cache_directory):
-            os.makedirs(cache_directory)
         filename = "%s_p%s_M%s_L%s_v%s.sobj" % (name, self.p, self.M, self.L, self.matrix_cache_version)
-        return os.path.join(cache_directory, filename)
+        return local_cache_path(filename)
 
-    def _load_matrix(self, name):
-        path = self._matrix_cache_path(name)
-        if not os.path.exists(path):
+    def _validate_cached_matrix(self, cached_matrix, path):
+        if cached_matrix is None:
             return None
-
-        try:
-            cached_matrix = load(path)
-        except (OSError, EOFError, ValueError):
-            print("Ignoring unreadable cached matrix %s." % path)
-            return None
-
-        if cached_matrix.nrows() != self.dim_A or cached_matrix.ncols() != self.dim_A:
-            print("Ignoring cached matrix with the wrong dimensions: %s" % path)
+        if (not isinstance(cached_matrix, Matrix)
+                or cached_matrix.base_ring() != self.F
+                or cached_matrix.nrows() != self.dim_A
+                or cached_matrix.ncols() != self.dim_A):
+            print("Ignoring cached matrix with the wrong type, field or dimensions: %s" % path)
             return None
         return cached_matrix
 
+    def _load_cached_matrix(self, path):
+        return self._validate_cached_matrix(load_cached_object(path), path)
+
+    def matrix_cache_metadata(self, name, depth=None):
+        """Metadata shared by the public-cache reader and export tool."""
+        return {
+            "p": int(self.p), "M": int(self.M), "L": int(self.L),
+            "matrix_type": name, "depth": None if depth is None else int(depth),
+            "cache_version": int(self.matrix_cache_version),
+            "nrows": int(self.dim_A), "ncols": int(self.dim_A),
+            "coefficient_field": "GF(%s)" % self.p,
+        }
+
+    def _load_matrix_with_public_fallback(self, path, name, depth=None):
+        cached_matrix = self._load_cached_matrix(path)
+        if cached_matrix is not None:
+            return cached_matrix
+        filename = os.path.basename(path)
+        public_matrix = load_public_cached_object(filename, self.matrix_cache_metadata(name, depth))
+        public_matrix = self._validate_cached_matrix(public_matrix, filename)
+        if public_matrix is not None:
+            print("Loaded public cache entry %s." % filename)
+        return public_matrix
+
+    def _load_matrix(self, name):
+        return self._load_matrix_with_public_fallback(self._matrix_cache_path(name), name)
+
     def _save_matrix(self, name, matrix_to_save):
-        save(matrix_to_save, self._matrix_cache_path(name))
+        atomic_save(matrix_to_save, self._matrix_cache_path(name))
 
     def _iterated_frobenius_cache_path(self, depth):
-        cache_directory = os.environ.get("KERNEL_ELEMENTS_CACHE_DIR", ".sage-cache")
-        if not os.path.isdir(cache_directory):
-            os.makedirs(cache_directory)
         filename = "Fpower_p%s_M%s_L%s_d%s_v%s.sobj" % (self.p, self.M, self.L, depth, self.matrix_cache_version)
-        return os.path.join(cache_directory, filename)
+        return local_cache_path(filename)
 
     def _load_frobenius_power(self, depth):
-        path = self._iterated_frobenius_cache_path(depth)
-        if not os.path.exists(path):
-            return None
-
-        try:
-            cached_power = load(path)
-        except (OSError, EOFError, ValueError):
-            print("Ignoring unreadable cached Frobenius iterate at %s." % path)
-            return None
-
-        if cached_power.nrows() != self.dim_A or cached_power.ncols() != self.dim_A:
-            print("Ignoring cached Frobenius iterate with the wrong dimensions: %s" % path)
-            return None
-        return cached_power
+        return self._load_matrix_with_public_fallback(self._iterated_frobenius_cache_path(depth), "Fpower", depth)
 
     def _save_frobenius_power(self, depth, matrix_to_save):
-        save(matrix_to_save, self._iterated_frobenius_cache_path(depth))
+        atomic_save(matrix_to_save, self._iterated_frobenius_cache_path(depth))
 
     def _build_E_matrix(self):
         """Build E from coefficient vectors, avoiding quotient-ring evaluations."""
@@ -275,19 +383,20 @@ class FiniteLevel:
 
         return matrix(self.F, self.N * self.dim_B, self.N * self.dim_B, entries, sparse=True)
 
-    def _build_F_matrix(self):
-        """Build Frobenius directly from its action on monomial basis elements."""
+    def _build_F_matrix(self, depth=1):
+        """Build x |-> x^(p^depth) directly on the basis a^i Y^j."""
+        depth = Integer(depth)
+        if depth < 0:
+            raise ValueError("Frobenius depth must be nonnegative.")
+        # Every nonconstant monomial vanishes once p^depth reaches both bounds.
+        power = self.p ** min(depth, max(self.L, self.M))
         entries = {}
 
-        for Y_degree in range(self.N):
-            for a_degree in range(self.dim_B):
+        for Y_degree in range((self.N - 1) // power + 1):
+            for a_degree in range((self.dim_B - 1) // power + 1):
                 column = Y_degree * self.dim_B + a_degree
-                frobenius_a_degree = a_degree * self.p
-                frobenius_Y_degree = Y_degree * self.p
-
-                if frobenius_a_degree < self.dim_B and frobenius_Y_degree < self.N:
-                    row = frobenius_Y_degree * self.dim_B + frobenius_a_degree
-                    entries[(row, column)] = 1
+                row = Y_degree * power * self.dim_B + a_degree * power
+                entries[(row, column)] = 1
 
         return matrix(self.F, self.dim_A, self.dim_A, entries, sparse=True)
 
@@ -332,7 +441,7 @@ class FiniteLevel:
             return cached_power
 
         print("Building Frobenius iterate F^%s..." % depth)
-        self._frobenius_powers[key] = self.F_matrix ** depth
+        self._frobenius_powers[key] = self._build_F_matrix(depth)
         self._save_frobenius_power(depth, self._frobenius_powers[key])
         return self._frobenius_powers[key]
 
@@ -489,16 +598,30 @@ def lift_element(x, old_level, new_level):
 
 
 def verify_tower(level, roots):
-    """Verify every condition again, especially after changing level."""
-    for r in sorted(roots):
+    """Validate a contiguous tower, including when reading a cached payload."""
+    if not isinstance(roots, dict):
+        raise ValueError("A root tower must be a dictionary.")
+    if not roots:
+        return
+    if any(not isinstance(r, (int, Integer)) for r in roots):
+        raise ValueError("Root indices must be integers.")
+    indices = sorted(roots)
+    if indices[0] != 1 or indices[-1] > min(level.M, level.L):
+        raise ValueError("Root indices must start at 1 and fit the finite level.")
+    if indices != list(range(1, indices[-1] + 1)):
+        raise ValueError("A root tower must contain every preceding root.")
+    for r in indices:
         x = roots[r]
-        assert all(value == 0 for value in level.E(x))
+        if parent(x) != level.A:
+            raise ValueError("Root x_%s belongs to the wrong finite-level ring." % r)
+        if not all(value == 0 for value in level.E(x)):
+            raise ValueError("Root x_%s is not in the evaluation kernel." % r)
         reduction_matrix = level.reduction_matrix(r)
-        assert reduction_matrix * level.A_to_vector(x) == level.reduction_target(r)
-        if r == 1:
-            assert x ** level.p == 0
-        else:
-            assert x ** level.p == roots[r - 1]
+        if reduction_matrix * level.A_to_vector(x) != level.reduction_target(r):
+            raise ValueError("Root x_%s has the wrong congruence." % r)
+        preceding_root = level.A(0) if r == 1 else roots[r - 1]
+        if x ** level.p != preceding_root:
+            raise ValueError("Root x_%s is incompatible with its preceding root." % r)
 
 
 def element_in_t_e(level, x):
@@ -577,13 +700,12 @@ def print_root(level, r, x):
         print("x_%s in (e,t) =" % r, element_in_t_e(level, x))
 
 
-def save_displayed_root_tower(level, family, target_index, x_target):
-    """Persist the solution family currently displayed to the user, even if they quit after inspection."""
+def save_displayed_root_tower(level, target_index, x_target):
+    """Persist the displayed root tower, even if exploration ends without selection."""
     roots = {target_index: x_target}
     for r in range(target_index, 1, -1):
         roots[r - 1] = roots[r] ** level.p
 
-    verify_tower(level, roots)
     save_level_roots(level, roots)
     print("Saved displayed root tower for (p, M, L) = (%s, %s, %s)." % (level.p, level.M, level.L))
     return roots
@@ -595,23 +717,18 @@ def choose_solution(level, family, r):
     next_index = Integer(1)
     current = family.element(current_index)
 
-    total = family.number_of_solutions()
     print("\nA solution was found at ramification depth %s and polynomial depth %s." % (level.L, level.M))
-    print("Number of affine solutions at this level:", total)
     print("Solution index:", current_index)
     print_root(level, r, current)
 
-    roots = {r: current}
-    for lower_index in range(r, 1, -1):
-        roots[lower_index - 1] = roots[lower_index] ** level.p
-    verify_tower(level, roots)
-    save_level_roots(level, roots)
+    save_displayed_root_tower(level, r, current)
 
     while True:
         print("\nChoose what to do with this affine solution family:")
         print("  [U] use the displayed solution")
         print("  [N] display the next solution")
         print("  [R] display a random non-particular solution")
+        print("  [C] count the solutions and compute the affine directions")
         print("  [Q] stop without selecting a solution")
         choice = input("> ").strip().upper()
 
@@ -624,7 +741,7 @@ def choose_solution(level, family, r):
         if choice == "Q":
             return None
 
-        if choice not in ("N", "R"):
+        if choice not in ("N", "R", "C"):
             print("Unknown choice.")
             continue
 
@@ -632,6 +749,9 @@ def choose_solution(level, family, r):
         total = family.number_of_solutions()
         print("Affine solution dimension:", dimension)
         print("Number of solutions:", total)
+
+        if choice == "C":
+            continue
 
         if total == 1:
             print("The displayed solution is unique at this finite level.")
@@ -649,6 +769,7 @@ def choose_solution(level, family, r):
         current = family.element(current_index)
         print("\nSolution index:", current_index)
         print_root(level, r, current)
+        save_displayed_root_tower(level, r, current)
 
 
 def extend_tower_from_direct_root(level, roots, x, current_index, target_index):
@@ -744,40 +865,8 @@ def rebuild_larger_level(level, roots, required_r):
 
 
 def initialization_search(level):
-    """Find and select x_1 before any direct root searches."""
-    roots = {}
-
-    while True:
-        if level.L < 1:
-            print("\nInitialization requires L >= 1.")
-            family = None
-        else:
-            q = level.reduction_power(1)
-            print("\nSearching for x_1...")
-            print("Imposing E(x_1) = 0 and x_1^p = 0.")
-            print("Imposing x_1 = Y^(p^(M-1)) mod a^%s = e^(1/p)." % q)
-            family = level.initialization_family()
-
-        if family is not None:
-            x_1 = choose_solution(level, family, 1)
-            if x_1 is None:
-                if family._last_displayed is not None:
-                    roots = {1: family._last_displayed}
-                    verify_tower(level, roots)
-                    save_level_roots(level, roots)
-                    return (level, roots, True)
-                return (level, roots, False)
-
-            roots = {1: x_1}
-            verify_tower(level, roots)
-            return (level, roots, True)
-
-        print("No initialization solution at the current finite level.")
-        rebuilt = rebuild_larger_level(level, roots, 1)
-        if rebuilt is None:
-            return (level, roots, False)
-        level, roots = rebuilt
-        # Retry initialization at the new level.
+    """Backward-compatible entry point for the unified x_1 startup search."""
+    return startup_search(level, 1)
 
 
 def read_jump_depth(current_index):
@@ -822,7 +911,7 @@ def direct_jump_search(level, roots, current_index, depth):
                     roots = extend_tower_from_direct_root(level, roots, family._last_displayed, current_index, target_index)
                     print("\nThe displayed root was saved for the exact level cache.")
                     save_level_roots(level, roots)
-                    return (level, roots, True)
+                    return (level, roots, False)
                 return (level, roots, False)
 
             roots = extend_tower_from_direct_root(level, roots, x, current_index, target_index)
@@ -838,34 +927,31 @@ def direct_jump_search(level, roots, current_index, depth):
 
 
 def startup_search(level, requested_n=None):
-    """Search for an initial root x_n directly, with n >= 1. If n == 1, this agrees with the old initialization."""
-    cached_roots = load_level_roots(level)
-
+    """Choose one initial index, then retry it unchanged after level enlargement."""
     while True:
         if requested_n is None:
             raw = input("\nEnter initial root index n >= 1 ([Q] to stop): ").strip()
             if raw.upper() == "Q":
                 return (level, {}, False)
-
-            try:
-                n = Integer(raw)
-            except (TypeError, ValueError):
-                print("Please enter a positive integer.")
-                continue
         else:
-            n = requested_n
+            raw = requested_n
             requested_n = None
-
-        if n < 1:
-            print("Need n >= 1.")
+        try:
+            n = Integer(raw)
+        except (TypeError, ValueError):
+            print("Please enter a positive integer.")
             continue
+        if n >= 1:
+            break
+        print("Need n >= 1.")
 
-        if cached_roots is not None and n > 1 and n in cached_roots:
-            roots = {idx: cached_roots[idx] for idx in sorted(cached_roots) if idx <= n}
+    while True:
+        cached_roots = load_level_roots(level)
+        if cached_roots is not None and n in cached_roots:
             while True:
-                choice = input("\nA cached solution exists for x_%s. [D] display it, [F] rebuild the full affine family, or [Q] quit: " % n).strip().upper()
+                choice = input("\nA cached solution exists for x_%s. [D] display it, [F] rebuild the affine family, or [Q] quit: " % n).strip().upper()
                 if choice == "D":
-                    verify_tower(level, roots)
+                    roots = {idx: root for idx, root in cached_roots.items() if idx <= n}
                     return (level, roots, True)
                 if choice == "F":
                     break
@@ -873,85 +959,59 @@ def startup_search(level, requested_n=None):
                     return (level, {}, False)
                 print("Please choose [D], [F], or [Q].")
 
-        if n == 1:
-            return initialization_search(level)
-
         if n > level.M or n > level.L:
             print("\nThe search for x_%s requires M >= %s and L >= %s." % (n, n, n))
-            rebuilt = rebuild_larger_level(level, {}, n)
-            if rebuilt is None:
-                return (level, {}, False)
-            level, _ = rebuilt
-            cached_roots = load_level_roots(level)
-            continue
+            family = None
+        else:
+            print("\nSearching for x_%s with E(x_%s) = 0 and the prescribed congruence..." % (n, n))
+            family = level.zero_root_family(n)
+            if family is None:
+                print("No direct x_%s solution at the current finite level." % n)
 
-        family = level.zero_root_family(n)
-        if family is None:
-            print("No direct x_%s solution at the current finite level." % n)
-            rebuilt = rebuild_larger_level(level, {}, n)
-            if rebuilt is None:
+        if family is not None:
+            x_n = choose_solution(level, family, n)
+            # Displayed roots are cached even when exploration ends with Q.
+            selected = x_n is not None
+            if x_n is None:
+                x_n = family._last_displayed
+            if x_n is None:
                 return (level, {}, False)
-            level, _ = rebuilt
-            cached_roots = load_level_roots(level)
-            continue
+            roots = {n: x_n}
+            for r in range(n, 1, -1):
+                roots[r - 1] = roots[r] ** level.p
+            verify_tower(level, roots)
+            return (level, roots, selected)
 
-        x_n = choose_solution(level, family, n)
-        if x_n is None:
-            if family._last_displayed is not None:
-                roots = {idx: family._last_displayed for idx in [n]}
-                for r in range(n, 1, -1):
-                    roots[r - 1] = roots[r] ** level.p
-                verify_tower(level, roots)
-                save_level_roots(level, roots)
-                return (level, roots, True)
+        rebuilt = rebuild_larger_level(level, {}, n)
+        if rebuilt is None:
             return (level, {}, False)
-
-        roots = {n: x_n}
-        for r in range(n, 1, -1):
-            roots[r - 1] = roots[r] ** level.p
-        verify_tower(level, roots)
-        return (level, roots, True)
-
-
-def level_matrix_path(level, name):
-    cache_directory = os.environ.get("KERNEL_ELEMENTS_CACHE_DIR", ".sage-cache")
-    if not os.path.isdir(cache_directory):
-        os.makedirs(cache_directory)
-    return os.path.join(cache_directory, "%s_p%s_M%s_L%s_v%s.sobj" % (name, level.p, level.M, level.L, level.matrix_cache_version))
+        level, _ = rebuilt
 
 
 def level_roots_path(level):
-    cache_directory = os.environ.get("KERNEL_ELEMENTS_CACHE_DIR", ".sage-cache")
-    if not os.path.isdir(cache_directory):
-        os.makedirs(cache_directory)
-    return os.path.join(cache_directory, "roots_p%s_M%s_L%s.sobj" % (level.p, level.M, level.L))
+    return local_cache_path("roots_p%s_M%s_L%s.sobj" % (level.p, level.M, level.L))
 
 
 def save_level_roots(level, roots):
+    verify_tower(level, roots)
     payload = {Integer(index): root for index, root in roots.items()}
-    save(payload, level_roots_path(level))
+    atomic_save(payload, level_roots_path(level))
     print("Saved cached roots for (p, M, L) = (%s, %s, %s) at %s" % (level.p, level.M, level.L, level_roots_path(level)))
 
 
 def load_level_roots(level):
     path = level_roots_path(level)
-    if not os.path.exists(path):
+    payload = load_cached_object(path)
+    if payload is None:
         return None
-
     try:
-        payload = load(path)
-    except (OSError, EOFError, ValueError):
-        print("Ignoring unreadable cached roots at %s." % path)
+        verify_tower(level, payload)
+    except ValueError as error:
+        print("Ignoring invalid cached roots at %s: %s" % (path, error))
         return None
-
-    if not isinstance(payload, dict):
-        print("Ignoring malformed cached roots at %s." % path)
+    if not payload:
         return None
-
-    roots = {Integer(index): root for index, root in payload.items()}
-    if not roots:
-        return None
-    return roots
+    return {Integer(index): root for index, root in payload.items()}
 
 
 def interactive_search():
@@ -961,34 +1021,11 @@ def interactive_search():
     initial_n = Integer(input("Enter initial root index n >= 1: "))
 
     level = FiniteLevel(p, M, L)
-    cached_roots = load_level_roots(level)
-
-    if cached_roots is not None and initial_n in cached_roots:
-        print("\nA solution is already in the cache for this level.")
-        while True:
-            choice = input("Do you want to [D]isplay the cached solution, [F] rebuild the full affine family, or [Q] quit? ").strip().upper()
-            if choice == "D":
-                roots = {idx: cached_roots[idx] for idx in sorted(cached_roots) if idx <= initial_n}
-                current_index = max(roots)
-                break
-            if choice == "F":
-                level, roots, initialized = startup_search(level, initial_n)
-                if not initialized:
-                    print("\nStartup search stopped before choosing an initial root.")
-                    return
-                current_index = max(roots)
-                save_level_roots(level, roots)
-                break
-            if choice == "Q":
-                return
-            print("Please choose [D], [F], or [Q].")
-    else:
-        level, roots, initialized = startup_search(level, initial_n)
-        if not initialized:
-            print("\nStartup search stopped before choosing an initial root.")
-            return
-        current_index = max(roots)
-        save_level_roots(level, roots)
+    level, roots, initialized = startup_search(level, initial_n)
+    if not initialized:
+        print("\nStartup search stopped before choosing an initial root.")
+        return
+    current_index = max(roots)
 
     while True:
         print_tower(level, roots)
@@ -1006,4 +1043,6 @@ def interactive_search():
     print_tower(level, roots)
 
 
-interactive_search()
+# Sage's Python CLI executes files in sage.all; traditional launchers use __main__.
+if __name__ in ("__main__", "sage.all"):
+    interactive_search()

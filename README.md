@@ -72,11 +72,9 @@ At a chosen finite level and initial root index $n \ge  1$, the program searches
 
 - $E(x_n) = 0$
 
-- $x_n^{p^n} = 0$
-
 - $x_n = Y^{p^{M-n}} \bmod a^{p^{L-n}}$
 
-  
+The congruence implies $x_n^{p^n}=0$, since the ring has characteristic $p$ and $Y^{p^M}=a^{p^L}=0$. No separate nilpotence equations are added to the initial search. In fact, the representative $f_n\in B_L[Y]$ of degree less than $p^M$ satisfies $f_n^{p^n}=Y^{p^M}$ before quotienting by $Y^{p^M}$.
 
 If the search is successful, the user can inspect the resulting affine family, choose a displayed solution, and then continue by taking Frobenius jumps to larger indices. The user may also increase the finite level $(M, L)$ as needed if the current approximation is too small.
 
@@ -258,7 +256,7 @@ When a direct family is found, it builds an `AffineSolutionFamily` object. This 
 
 - one particular solution
 
-- the kernel directions
+- the kernel directions, computed only when requested
 
 - a way to generate other solutions by index
 
@@ -274,9 +272,11 @@ The user then sees a menu such as:
 
 -  `[R]` display a random non-particular solution
 
+-  `[C]` compute the affine dimension and count the solutions
+
 -  `[Q]` stop without selecting a solution
 
-  
+The first solution can be displayed and accepted without computing the kernel basis. The `[N]`, `[R]`, and `[C]` actions compute that basis when needed. Each displayed root tower is cached; `[Q]` stops exploration while preserving the last displayed tower for a future run.
 
 ### 5. Frobenius jumps
 
@@ -308,7 +308,7 @@ The program then searches for a deeper root compatible with the current tower an
 
 The script uses a cache directory named `.sage-cache` by default.
 
-  
+Set `KERNEL_ELEMENTS_CACHE_DIR` to use a different local cache directory. Cache filenames and Sage object formats remain compatible with earlier runs.
 
 It stores:
 
@@ -342,7 +342,13 @@ The cache is exact-level aware: it is keyed by $(p, M, L)$ and by the relevant m
 
 It is a reuse mechanism for exact finite-level computations.
 
-  
+Matrix entries are checked for the correct type, coefficient field, and dimensions when loaded. Cached root towers are checked for consecutive indices starting at 1, the correct finite-level ring, evaluation-kernel membership, congruences, and Frobenius compatibility. Invalid or unreadable entries are ignored and can be recomputed.
+
+Cache writes use a temporary file in the same directory and atomically replace the previous entry after the write completes. Frobenius iterates are constructed directly from their action on monomials rather than by matrix exponentiation.
+
+The repository also includes a read-only [public-cache](public-cache/README.md) of large evaluation matrices, totaling about 583 MiB. Matrix loading tries the local cache first, then the public cache, and finally computes a missing matrix into the local cache. Root towers remain local. Public objects larger than 32 MiB are stored in chunks, assembled in temporary space when needed, and checked against the sizes, checksums, and matrix metadata in the catalog. The public directory is resolved relative to the script; `KERNEL_ELEMENTS_PUBLIC_CACHE_DIR` overrides its location.
+
+To validate and export large matrices already computed in `.sage-cache/`, run `sage tools/export_public_cache.py`. This is an explicit maintenance step; interactive searches never write to the public cache. See the public-cache README for selection rules, options, and validation limits.
 
 ---
 
@@ -375,6 +381,8 @@ After enlargement, the previous tower is lifted to the new level and verified be
   
 The user can dynamically increase the finite approximation until a root becomes visible.
 
+The initial search keeps the requested root index after enlargement and retries it at the new level.
+
   
 
 ---
@@ -384,14 +392,6 @@ The user can dynamically increase the finite approximation until a root becomes 
 ## Important notes
 
   
-
-### Cache is not a checkpoint
-
-  
-
-The script does not save a full session state and resume later from it. Instead, it saves exact-level computations and root towers so that repeated work can be avoided.
-  
-
 ### The root tower is a coherent sequence
 
   
@@ -400,7 +400,7 @@ When a solution is found, the program reconstructs the earlier roots by applying
 
   
 
-### The user remains in control
+### Available choices during execution
 
   
 
@@ -460,6 +460,12 @@ A typical run looks like this:
 
 - [kernel_elements.sage](kernel_elements.sage) — main Sage script
 
+- [tests/test_kernel_elements.py](tests/test_kernel_elements.py) — mathematical and interactive regression checks
+
+- [public-cache/](public-cache/README.md) — shared large evaluation matrices and their checksummed catalog
+
+- [tools/export_public_cache.py](tools/export_public_cache.py) — validate and export local matrix precomputations
+
 -  `.sage-cache/` — cache directory for exact-level matrices and root towers
 
   
@@ -478,5 +484,15 @@ A typical run looks like this:
   
 
 ---
+
+## Regression checks
+
+Run the tests with SageMath:
+
+```bash
+sage tests/test_kernel_elements.py
+```
+
+The tests use temporary caches. They check matrix actions against ring operations, direct Frobenius iterates against matrix powers, exact polynomial lifts, successful compatible jumps, level transport, local and public cache validation, chunk assembly and checksums, interrupted writes, the export tool, and the interactive startup and solution-selection flows.
 
 

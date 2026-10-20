@@ -1,5 +1,6 @@
 .sage-cache/
 *.sobj
+!/public-cache/*.sobj
 __pycache__/
 *.pyc
 *.pyo
