@@ -94,6 +94,79 @@ class KernelElementsTests(unittest.TestCase):
                     family.validator(x)
                     self.assertEqual(x.lift() ** (p ** n), level.S.gen() ** (p ** M))
 
+    def test_integral_power_retains_binomial_terms_and_integral_t_relation(self):
+        level = FiniteLevel(2, 2, 2)
+        ring = NAMESPACE["integral_lift_ring"](level)
+        T = ring.gen()
+        u = ring.base_ring().gen()
+        self.assertEqual(ring.characteristic(), 0)
+        self.assertEqual(u ** 4 + 1, 0)
+        self.assertEqual(T ** 4, 1)
+        # (T-1)^4 has nonzero cross terms, even though Y^4=0 modulo 2.
+        power = NAMESPACE["integral_power"](level, 1, level.Y ** 2)
+        self.assertEqual(power, -4 * T ** 3 + 6 * T ** 2 - 4 * T + 2)
+        self.assertNotEqual(power, 0)
+
+    def test_integral_lift_uses_nonnegative_coefficient_representatives(self):
+        level = FiniteLevel(3, 2, 2)
+        ring = NAMESPACE["integral_lift_ring"](level)
+        T = ring.gen()
+        u = ring.base_ring().gen()
+        x = level.A(2 * level.a) * level.Y + level.A(level.a ** 2) * level.Y ** 2
+        A = ring(u - 1) * (T - 1)
+        B = ring((u - 1) ** 2) * (T - 1) ** 2
+        self.assertEqual(NAMESPACE["integral_lift"](level, x), 2 * A + B)
+        self.assertEqual(NAMESPACE["integral_power"](level, 1, x),
+                         8 * A ** 3 + 12 * A ** 2 * B + 6 * A * B ** 2 + B ** 3)
+
+    def test_integral_solution_powers_reduce_and_match_cyclotomic_evaluations(self):
+        for p, M, L, n in [(2, 2, 2, 1), (2, 4, 3, 2), (3, 2, 2, 1)]:
+            level = FiniteLevel(p, M, L)
+            family = level.zero_root_family(n)
+            K = sage.CyclotomicField(p ** (L + 1), "v")
+            v = K.gen()
+            for index in [0, 1]:
+                with self.subTest(p=p, M=M, L=L, n=n, index=index):
+                    x = family.element(index)
+                    lifted = NAMESPACE["integral_lift"](level, x)
+                    power = NAMESPACE["integral_power"](level, n, x)
+                    for integral, expected in [(lifted, x), (power, level.A(0))]:
+                        reduced = level.A(0)
+                        for j, coefficient in enumerate(integral.lift().list()):
+                            b = sum((level.B(c) * (1 + level.a) ** i
+                                     for i, c in enumerate(coefficient.lift().list())),
+                                    level.B(0))
+                            reduced += level.A(b) * (1 + level.Y) ** j
+                        self.assertEqual(reduced, expected)
+                    # Independently compare at every T-root in a cyclotomic field.
+                    # These roots determine a polynomial of degree < p^M.
+                    for k in range(p ** M):
+                        T_value = v ** (k * p ** (L + 1 - M))
+                        lifted_value = sum(
+                            (sum((sage.ZZ(c) * (v - 1) ** i
+                                  for i, c in enumerate(b.lift().list())), K(0))
+                             * (T_value - 1) ** j
+                             for j, b in enumerate(x.lift().list())), K(0))
+                        power_value = sum(
+                            (sum((sage.ZZ(c) * v ** i
+                                  for i, c in enumerate(b.lift().list())), K(0))
+                             * T_value ** j
+                             for j, b in enumerate(power.lift().list())), K(0))
+                        self.assertEqual(power_value, lifted_value ** (p ** n))
+
+    def test_integral_display_uses_current_root_index_and_defines_notation(self):
+        level, roots = self.tower()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            NAMESPACE["print_root"](level, 2, roots[2])
+        displayed = output.getvalue()
+        self.assertIn("T = t^(1/16)", displayed)
+        self.assertIn("u is a primitive 16-th root of unity", displayed)
+        self.assertIn("Z[u][T]/(T^16-1)", displayed)
+        self.assertIn("tilde(x_2)^(2^2) =", displayed)
+        self.assertNotIn("tilde(x_1)", displayed)
+        self.assertIn(str(NAMESPACE["integral_power"](level, 2, roots[2])), displayed)
+
     def test_successful_jump_and_level_transport(self):
         level, roots = self.tower()
         NAMESPACE["verify_tower"](level, roots)
@@ -230,8 +303,15 @@ class KernelElementsTests(unittest.TestCase):
         self.assertEqual(NAMESPACE["load_level_roots"](level), displayed)
 
     def test_interactive_flow(self):
-        with patch.object(builtins, "input", side_effect=["2", "2", "2", "1", "U", "Q"]):
-            NAMESPACE["interactive_search"]()
+        for choices in [["2", "2", "2", "1", "U", "Q"],
+                        ["2", "2", "2", "1", "D", "Q"]]:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                with patch.object(builtins, "input", side_effect=choices):
+                    NAMESPACE["interactive_search"]()
+            self.assertIn("tilde(x_1)^(2^1) =", output.getvalue())
+            self.assertIn("T = t^(1/4)", output.getvalue())
+            self.assertIn("u is a primitive 8-th root of unity", output.getvalue())
 
     def test_public_cache_single_file_and_chunks_are_read_only_fallbacks(self):
         level = FiniteLevel(2, 2, 2)

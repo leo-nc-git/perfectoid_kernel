@@ -688,6 +688,66 @@ def element_in_t_e(level, x):
     return " + ".join(terms)
 
 
+def integral_lift_ring(level):
+    """Return Z[u][T]/(T^(p^M)-1), with u a primitive p^(L+1)-st root."""
+    if not hasattr(level, "_integral_lift_ring"):
+        U = PolynomialRing(ZZ, "u_polynomial")
+        order = level.p ** (level.L + 1)
+        coefficients = U.quotient(U.cyclotomic_polynomial(order), names="u")
+        P = PolynomialRing(coefficients, "T_polynomial")
+        level._integral_lift_ring = P.quotient(P.gen() ** level.N - 1, names="T")
+    return level._integral_lift_ring
+
+
+def integral_lift(level, x):
+    """Lift the reduced (a,Y) representative using coefficients 0,...,p-1.
+
+    Substitute a -> u-1 and Y -> T-1 in characteristic zero. In particular,
+    do not use the Frobenius simplifications in the readable (e,t) display.
+    This representative convention is a section of reduction, not a ring map.
+    """
+    if parent(x) != level.A:
+        raise ValueError("The element belongs to the wrong finite-level ring.")
+
+    ring = integral_lift_ring(level)
+    coefficients = ring.base_ring()
+    u_minus_one = coefficients.gen() - 1
+    T_minus_one = ring.gen() - 1
+    result = ring(0)
+    for coefficient in reversed(x.lift().list()):
+        lifted_coefficient = coefficients(0)
+        for value in reversed(coefficient.lift().list()):
+            lifted_coefficient = lifted_coefficient * u_minus_one + ZZ(value)
+        result = result * T_minus_one + ring(lifted_coefficient)
+    return result
+
+
+def integral_power(level, n, x):
+    """Compute tilde(x_n)^(p^n) exactly, retaining the last result for redisplay."""
+    n = Integer(n)
+    if n < 1:
+        raise ValueError("Need n >= 1 for an integral root power.")
+    if parent(x) != level.A:
+        raise ValueError("The element belongs to the wrong finite-level ring.")
+    previous = getattr(level, "_last_integral_power", None)
+    if previous is not None and previous[0] == n and previous[1] == x:
+        return previous[2]
+    result = integral_lift(level, x) ** (level.p ** n)
+    level._last_integral_power = (n, x, result)
+    return result
+
+
+def print_integral_power(level, n, x):
+    """Display the exact integral power of the current root, with its notation."""
+    print("Integral power in Z[u][T]/(T^%s-1):" % level.N)
+    print("Here T = t^(1/%s); u is a primitive %s-th root of unity."
+          % (level.N, level.p ** (level.L + 1)))
+    print("Lift convention: coefficients 0,...,%s, a -> u-1, Y -> T-1."
+          % (level.p - 1))
+    print("tilde(x_%s)^(%s^%s) =" % (n, level.p, n), end=" ", flush=True)
+    print(integral_power(level, n, x))
+
+
 def print_root(level, r, x):
     """Print a root and, if relevant, all previous roots obtained by Frobenius descent."""
     if r > 1:
@@ -698,6 +758,7 @@ def print_root(level, r, x):
             print("x_%s in (e,t) =" % lower_index, element_in_t_e(level, lower_root))
     else:
         print("x_%s in (e,t) =" % r, element_in_t_e(level, x))
+    print_integral_power(level, r, x)
 
 
 def save_displayed_root_tower(level, target_index, x_target):
