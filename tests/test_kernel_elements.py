@@ -94,18 +94,20 @@ class KernelElementsTests(unittest.TestCase):
                     family.validator(x)
                     self.assertEqual(x.lift() ** (p ** n), level.S.gen() ** (p ** M))
 
-    def test_integral_power_retains_binomial_terms_and_integral_t_relation(self):
+    def test_integral_power_retains_binomial_terms_and_free_t_variable(self):
         level = FiniteLevel(2, 2, 2)
         ring = NAMESPACE["integral_lift_ring"](level)
         T = ring.gen()
         u = ring.base_ring().gen()
         self.assertEqual(ring.characteristic(), 0)
         self.assertEqual(u ** 4 + 1, 0)
-        self.assertEqual(T ** 4, 1)
-        # (T-1)^4 has nonzero cross terms, even though Y^4=0 modulo 2.
+        self.assertNotEqual(T ** 4, 1)
+        # Retain T^4=t, even though Y^4=0 in the finite search ring.
         power = NAMESPACE["integral_power"](level, 1, level.Y ** 2)
-        self.assertEqual(power, -4 * T ** 3 + 6 * T ** 2 - 4 * T + 2)
-        self.assertNotEqual(power, 0)
+        self.assertEqual(power, T ** 4 - 4 * T ** 3 + 6 * T ** 2 - 4 * T + 1)
+        higher_power = NAMESPACE["integral_power"](level, 2, level.Y ** 3)
+        self.assertEqual(higher_power.degree(), 12)
+        self.assertEqual(higher_power, (T - 1) ** 12)
 
     def test_integral_lift_uses_nonnegative_coefficient_representatives(self):
         level = FiniteLevel(3, 2, 2)
@@ -119,40 +121,55 @@ class KernelElementsTests(unittest.TestCase):
         self.assertEqual(NAMESPACE["integral_power"](level, 1, x),
                          8 * A ** 3 + 12 * A ** 2 * B + 6 * A * B ** 2 + B ** 3)
 
-    def test_integral_solution_powers_reduce_and_match_cyclotomic_evaluations(self):
+    def test_integral_solution_powers_reduce_and_match_full_cyclotomic_polynomials(self):
         for p, M, L, n in [(2, 2, 2, 1), (2, 4, 3, 2), (3, 2, 2, 1)]:
             level = FiniteLevel(p, M, L)
             family = level.zero_root_family(n)
             K = sage.CyclotomicField(p ** (L + 1), "v")
             v = K.gen()
+            KP = sage.PolynomialRing(K, "V")
+            V = KP.gen()
+            BP = sage.PolynomialRing(level.B, "S")
+            S = BP.gen()
             for index in [0, 1]:
                 with self.subTest(p=p, M=M, L=L, n=n, index=index):
                     x = family.element(index)
                     lifted = NAMESPACE["integral_lift"](level, x)
                     power = NAMESPACE["integral_power"](level, n, x)
-                    for integral, expected in [(lifted, x), (power, level.A(0))]:
-                        reduced = level.A(0)
-                        for j, coefficient in enumerate(integral.lift().list()):
-                            b = sum((level.B(c) * (1 + level.a) ** i
-                                     for i, c in enumerate(coefficient.lift().list())),
-                                    level.B(0))
-                            reduced += level.A(b) * (1 + level.Y) ** j
+                    # Reduce coefficients modulo zeta_p-1, keeping T free.
+                    for integral, expected in [
+                            (lifted, x.lift()(S - 1)), (power, S ** level.N - 1)]:
+                        reduced = BP([
+                            sum((level.B(c) * (1 + level.a) ** i
+                                 for i, c in enumerate(b.lift().list())), level.B(0))
+                            for b in integral.list()])
                         self.assertEqual(reduced, expected)
-                    # Independently compare at every T-root in a cyclotomic field.
-                    # These roots determine a polynomial of degree < p^M.
-                    for k in range(p ** M):
-                        T_value = v ** (k * p ** (L + 1 - M))
-                        lifted_value = sum(
-                            (sum((sage.ZZ(c) * (v - 1) ** i
-                                  for i, c in enumerate(b.lift().list())), K(0))
-                             * (T_value - 1) ** j
-                             for j, b in enumerate(x.lift().list())), K(0))
-                        power_value = sum(
-                            (sum((sage.ZZ(c) * v ** i
-                                  for i, c in enumerate(b.lift().list())), K(0))
-                             * T_value ** j
-                             for j, b in enumerate(power.lift().list())), K(0))
-                        self.assertEqual(power_value, lifted_value ** (p ** n))
+                    # Independently compare full polynomials over a number field.
+                    # Evaluating only at roots of unity would miss a lost T^N-1.
+                    expected_lift = sum(
+                        (sum((sage.ZZ(c) * (v - 1) ** i
+                              for i, c in enumerate(b.lift().list())), K(0))
+                         * (V - 1) ** j
+                         for j, b in enumerate(x.lift().list())), KP(0))
+                    actual_power = KP([
+                        sum((sage.ZZ(c) * v ** i
+                             for i, c in enumerate(b.lift().list())), K(0))
+                        for b in power.list()])
+                    self.assertEqual(actual_power, expected_lift ** (p ** n))
+
+    def test_supplied_x2_power_retains_t_minus_one_mod_two(self):
+        level, _ = self.tower()
+        a, Y = level.a, level.Y
+        x = (level.A(a ** 4 + a ** 5) * Y
+             + level.A(a ** 2 + a ** 3) * Y ** 2
+             + level.A(a ** 3) * Y ** 3 + Y ** 4)
+        power = NAMESPACE["integral_power"](level, 2, x)
+        T = power.parent().gen()
+        self.assertEqual(power.degree(), 16)
+        self.assertEqual(power.leading_coefficient(), 1)
+        remainder = power - (T ** 16 - 1)
+        self.assertTrue(all(sage.ZZ(c) % 2 == 0
+                            for b in remainder.list() for c in b.lift().list()))
 
     def test_integral_display_uses_current_root_index_and_defines_notation(self):
         level, roots = self.tower()
@@ -162,7 +179,9 @@ class KernelElementsTests(unittest.TestCase):
         displayed = output.getvalue()
         self.assertIn("T = t^(1/16)", displayed)
         self.assertIn("u is a primitive 16-th root of unity", displayed)
-        self.assertIn("Z[u][T]/(T^16-1)", displayed)
+        self.assertIn("Integral power in Z[u][T]:", displayed)
+        self.assertIn("T^16 = t", displayed)
+        self.assertNotIn("Z[u][T]/", displayed)
         self.assertIn("tilde(x_2)^(2^2) =", displayed)
         self.assertNotIn("tilde(x_1)", displayed)
         self.assertIn(str(NAMESPACE["integral_power"](level, 2, roots[2])), displayed)

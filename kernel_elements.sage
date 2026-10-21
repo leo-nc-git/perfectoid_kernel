@@ -689,13 +689,12 @@ def element_in_t_e(level, x):
 
 
 def integral_lift_ring(level):
-    """Return Z[u][T]/(T^(p^M)-1), with u a primitive p^(L+1)-st root."""
+    """Return Z[u][T], with u a primitive p^(L+1)-st root and T free."""
     if not hasattr(level, "_integral_lift_ring"):
         U = PolynomialRing(ZZ, "u_polynomial")
         order = level.p ** (level.L + 1)
         coefficients = U.quotient(U.cyclotomic_polynomial(order), names="u")
-        P = PolynomialRing(coefficients, "T_polynomial")
-        level._integral_lift_ring = P.quotient(P.gen() ** level.N - 1, names="T")
+        level._integral_lift_ring = PolynomialRing(coefficients, "T")
     return level._integral_lift_ring
 
 
@@ -704,6 +703,7 @@ def integral_lift(level, x):
 
     Substitute a -> u-1 and Y -> T-1 in characteristic zero. In particular,
     do not use the Frobenius simplifications in the readable (e,t) display.
+    Keep T as a free polynomial variable, so T^(p^M)=t is retained.
     This representative convention is a section of reduction, not a ring map.
     """
     if parent(x) != level.A:
@@ -739,9 +739,9 @@ def integral_power(level, n, x):
 
 def print_integral_power(level, n, x):
     """Display the exact integral power of the current root, with its notation."""
-    print("Integral power in Z[u][T]/(T^%s-1):" % level.N)
-    print("Here T = t^(1/%s); u is a primitive %s-th root of unity."
-          % (level.N, level.p ** (level.L + 1)))
+    print("Integral power in Z[u][T]:")
+    print("Here T = t^(1/%s), so T^%s = t; u is a primitive %s-th root of unity."
+          % (level.N, level.N, level.p ** (level.L + 1)))
     print("Lift convention: coefficients 0,...,%s, a -> u-1, Y -> T-1."
           % (level.p - 1))
     print("tilde(x_%s)^(%s^%s) =" % (n, level.p, n), end=" ", flush=True)
