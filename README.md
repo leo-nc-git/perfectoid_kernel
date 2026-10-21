@@ -92,7 +92,7 @@ The script is designed for interactive exploration: it keeps exact-level computa
 
   
 
-In rough terms, the code looks for an element $x_n$ such that:
+The sciprt looks for an element $x_n$ such that:
 
   
 
