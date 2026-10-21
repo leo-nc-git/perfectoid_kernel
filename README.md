@@ -132,39 +132,45 @@ The script prints these roots in the readable $(e,t)$ notation, where
 
 ## Exact integral powers
 
-Whenever the current solution $x_n$ is displayed, the program also automatically
-computes and displays $\widetilde{x}_n^{p^n}$ in characteristic zero, including
+Whenever the current solution $`x_n`$ is displayed, the program also automatically
+computes and displays $`\widetilde{x}_n^{p^n}`$ in characteristic zero, including
 when displaying a cached tower or browsing other solutions. Earlier roots in
-the tower retain their existing $(e,t)$ display; the integral power is shown
+the tower retain their existing $`(e,t)`$ display; the integral power is shown
 for the current (deepest) root.
 
-The integral notation is
+The integral notation is:
 
-- $T=t^{1/p^M}$, so $T^{p^M}=1$;
-- $u=\zeta_{p^{L+1}}$, a primitive $p^{L+1}$-st root of unity.
+- $`T=t^{1/p^M}`$, so $`T^{p^M}=1`$.
+- $`u=\zeta_{p^{L+1}}`$, a primitive $`p^{L+1}`$-st root of unity.
 
 For the unique reduced representative
-$x_n=\sum_{i<p^L,\;j<p^M}c_{ij}a^iY^j$, choose
-$\widetilde c_{ij}\in\{0,\ldots,p-1\}$ and form
-\[
-\widetilde{x}_n=\sum_{i,j}\widetilde c_{ij}(u-1)^i(T-1)^j
-\quad\text{in}\quad
-\mathbb Z[u][T]/(T^{p^M}-1).
-\]
-Here $\mathbb Z[u]=\mathbb Z[U]/(\Phi_{p^{L+1}}(U))$. The displayed power is
-reduced using both the cyclotomic relation and $T^{p^M}=1$.
 
-The computation uses the stored $(a,Y)$ representative, before any
-characteristic-$p$ Frobenius simplifications used in the $(e,t)$ display.
+```math
+x_n = \sum_{\substack{0 \le i < p^L \\ 0 \le j < p^M}} c_{ij}a^iY^j,
+```
+
+choose integer coefficients $`\widetilde{c}_{ij}\in\{0,\ldots,p-1\}`$ and form:
+
+```math
+\widetilde{x}_n = \sum_{i,j}\widetilde{c}_{ij}(u-1)^i(T-1)^j
+\quad\text{in}\quad
+\mathbb{Z}[u][T]/(T^{p^M}-1).
+```
+
+Here $`\mathbb{Z}[u]=\mathbb{Z}[U]/(\Phi_{p^{L+1}}(U))`$. The displayed power is
+reduced using both the cyclotomic relation and $`T^{p^M}=1`$.
+
+The computation uses the stored $`(a,Y)`$ representative, before any
+Frobenius simplifications in characteristic $`p`$ used in the $`(e,t)`$ display.
 All binomial cross terms are retained. In particular, the integral relation
-is $T^{p^M}-1=0$, rather than $(T-1)^{p^M}=0$.
+is $`T^{p^M}-1=0`$, rather than $`(T-1)^{p^M}=0`$.
 
 This is a specified integral lift and a finite-stage sharp-map approximation.
 Changing the lift convention can change the exact finite-stage power.
 The result can have many terms and large integer coefficients at higher
 levels. The integral ring is constructed only when needed, and the last
 power is kept in memory for repeated display; existing on-disk caches
-continue to store the characteristic-$p$ computations.
+continue to store the computations in characteristic $`p`$.
 
 ---
 
