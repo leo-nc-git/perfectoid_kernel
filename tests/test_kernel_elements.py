@@ -94,20 +94,29 @@ class KernelElementsTests(unittest.TestCase):
                     family.validator(x)
                     self.assertEqual(x.lift() ** (p ** n), level.S.gen() ** (p ** M))
 
+    @staticmethod
+    def integral_coefficient_list(coefficient):
+        polynomial = coefficient.lift()
+        if hasattr(polynomial, "univariate_polynomial"):
+            polynomial = polynomial.univariate_polynomial()
+        return [sage.ZZ(c) for c in polynomial.list()]
+
     def test_integral_power_retains_binomial_terms_and_free_t_variable(self):
         level = FiniteLevel(2, 2, 2)
-        ring = NAMESPACE["integral_lift_ring"](level)
+        ring = NAMESPACE["integral_lift_ring"](level, 1)
         T = ring.gen()
         u = ring.base_ring().gen()
-        self.assertEqual(ring.characteristic(), 0)
+        self.assertEqual(ring.characteristic(), 4)
         self.assertEqual(u ** 4 + 1, 0)
         self.assertNotEqual(T ** 4, 1)
-        # Retain T^4=t, even though Y^4=0 in the finite search ring.
+        # Keep T^4=t, reducing only the coefficients modulo 2^(1+1).
         power = NAMESPACE["integral_power"](level, 1, level.Y ** 2)
-        self.assertEqual(power, T ** 4 - 4 * T ** 3 + 6 * T ** 2 - 4 * T + 1)
+        self.assertEqual(power, T ** 4 + 2 * T ** 2 + 1)
         higher_power = NAMESPACE["integral_power"](level, 2, level.Y ** 3)
+        higher_T = higher_power.parent().gen()
+        self.assertEqual(higher_power.parent().characteristic(), 8)
         self.assertEqual(higher_power.degree(), 12)
-        self.assertEqual(higher_power, (T - 1) ** 12)
+        self.assertEqual(higher_power, (higher_T - 1) ** 12)
 
     def test_integral_lift_uses_nonnegative_coefficient_representatives(self):
         level = FiniteLevel(3, 2, 2)
@@ -118,46 +127,89 @@ class KernelElementsTests(unittest.TestCase):
         A = ring(u - 1) * (T - 1)
         B = ring((u - 1) ** 2) * (T - 1) ** 2
         self.assertEqual(NAMESPACE["integral_lift"](level, x), 2 * A + B)
+        modular_ring = NAMESPACE["integral_lift_ring"](level, 1)
+        modular_T = modular_ring.gen()
+        modular_u = modular_ring.base_ring().gen()
+        A = modular_ring(modular_u - 1) * (modular_T - 1)
+        B = modular_ring((modular_u - 1) ** 2) * (modular_T - 1) ** 2
         self.assertEqual(NAMESPACE["integral_power"](level, 1, x),
                          8 * A ** 3 + 12 * A ** 2 * B + 6 * A * B ** 2 + B ** 3)
 
-    def test_integral_solution_powers_reduce_and_match_full_cyclotomic_polynomials(self):
-        for p, M, L, n in [(2, 2, 2, 1), (2, 4, 3, 2), (3, 2, 2, 1)]:
+    def test_integral_solution_powers_reduce_and_match_exact_powers_modulo_ideal(self):
+        for p, M, L, n in [(2, 2, 2, 1), (2, 4, 3, 2), (3, 2, 2, 1),
+                           (5, 1, 1, 1), (3, 2, 2, 2)]:
             level = FiniteLevel(p, M, L)
             family = level.zero_root_family(n)
+            if family is None:
+                # Also test higher odd-prime precision on a general element.
+                roots = [level.Y + level.A(2 * level.a) * level.Y ** 2]
+            else:
+                roots = [family.element(0), family.element(1)]
             K = sage.CyclotomicField(p ** (L + 1), "v")
             v = K.gen()
+            I = K.ideal((v ** (p ** L) - 1) ** (n + 1))
             KP = sage.PolynomialRing(K, "V")
             V = KP.gen()
             BP = sage.PolynomialRing(level.B, "S")
             S = BP.gen()
-            for index in [0, 1]:
+            for index, x in enumerate(roots):
                 with self.subTest(p=p, M=M, L=L, n=n, index=index):
-                    x = family.element(index)
-                    lifted = NAMESPACE["integral_lift"](level, x)
+                    lifted = NAMESPACE["integral_lift"](level, x, n=n)
                     power = NAMESPACE["integral_power"](level, n, x)
-                    # Reduce coefficients modulo zeta_p-1, keeping T free.
+                    # Reducing further modulo xi_p-1 recovers the original
+                    # polynomial representative, with T still free.
                     for integral, expected in [
-                            (lifted, x.lift()(S - 1)), (power, S ** level.N - 1)]:
+                            (lifted, x.lift()(S - 1)),
+                            (power, x.lift()(S - 1) ** (p ** n))]:
                         reduced = BP([
                             sum((level.B(c) * (1 + level.a) ** i
-                                 for i, c in enumerate(b.lift().list())), level.B(0))
+                                 for i, c in enumerate(self.integral_coefficient_list(b))),
+                                level.B(0))
                             for b in integral.list()])
                         self.assertEqual(reduced, expected)
-                    # Independently compare full polynomials over a number field.
-                    # Evaluating only at roots of unity would miss a lost T^N-1.
+                    # Compare full polynomials against an exact number-field
+                    # computation, coefficient by coefficient in the true ideal.
                     expected_lift = sum(
                         (sum((sage.ZZ(c) * (v - 1) ** i
                               for i, c in enumerate(b.lift().list())), K(0))
                          * (V - 1) ** j
                          for j, b in enumerate(x.lift().list())), KP(0))
                     actual_power = KP([
-                        sum((sage.ZZ(c) * v ** i
-                             for i, c in enumerate(b.lift().list())), K(0))
+                        sum((c * v ** i
+                             for i, c in enumerate(self.integral_coefficient_list(b))),
+                            K(0))
                         for b in power.list()])
-                    self.assertEqual(actual_power, expected_lift ** (p ** n))
+                    difference = actual_power - expected_lift ** (p ** n)
+                    self.assertTrue(all(c in I for c in difference.list()))
 
-    def test_supplied_x2_power_retains_t_minus_one_mod_two(self):
+    def test_odd_prime_modulus_is_the_exact_cyclotomic_ideal(self):
+        for p, M, L, n in [(3, 2, 2, 2), (5, 1, 1, 1)]:
+            level = FiniteLevel(p, M, L)
+            ring = NAMESPACE["integral_lift_ring"](level, n)
+            coefficients = ring.base_ring()
+            u = coefficients.gen()
+            pi = u ** (p ** L) - 1
+            self.assertEqual(pi ** (n + 1), 0)
+            self.assertNotEqual(pi ** n, 0)
+            self.assertNotEqual(ring.gen() ** (p ** M), 1)
+            if p == 3:
+                self.assertEqual(coefficients(9), 0)
+                self.assertNotEqual(coefficients(3), 0)
+            else:
+                self.assertEqual(coefficients(5), 0)
+
+    def test_modular_power_does_not_construct_the_exact_lift_ring(self):
+        factory = NAMESPACE["integral_lift_ring"]
+        for p in [2, 3]:
+            level = FiniteLevel(p, 2, 2)
+            def modular_only(current_level, n=None):
+                self.assertIsNotNone(n, "The automatic power must use modular arithmetic.")
+                return factory(current_level, n)
+            with patch.dict(NAMESPACE, integral_lift_ring=modular_only):
+                NAMESPACE["integral_power"](level, 1, level.Y)
+            self.assertFalse(hasattr(level, "_integral_lift_ring"))
+
+    def test_supplied_x2_power_is_modulo_eight_with_t_free(self):
         level, _ = self.tower()
         a, Y = level.a, level.Y
         x = (level.A(a ** 4 + a ** 5) * Y
@@ -165,13 +217,19 @@ class KernelElementsTests(unittest.TestCase):
              + level.A(a ** 3) * Y ** 3 + Y ** 4)
         power = NAMESPACE["integral_power"](level, 2, x)
         T = power.parent().gen()
+        coefficients = power.parent().base_ring()
+        self.assertEqual(coefficients(8), 0)
+        self.assertNotEqual(coefficients(4), 0)
         self.assertEqual(power.degree(), 16)
         self.assertEqual(power.leading_coefficient(), 1)
+        self.assertEqual(power[0][0], 7)
         remainder = power - (T ** 16 - 1)
-        self.assertTrue(all(sage.ZZ(c) % 2 == 0
-                            for b in remainder.list() for c in b.lift().list()))
+        self.assertTrue(all(c % 2 == 0 for b in remainder.list()
+                            for c in self.integral_coefficient_list(b)))
+        self.assertTrue(all(0 <= c < 8 for b in power.list()
+                            for c in self.integral_coefficient_list(b)))
 
-    def test_integral_display_uses_current_root_index_and_defines_notation(self):
+    def test_integral_display_uses_current_root_index_and_defines_modulus(self):
         level, roots = self.tower()
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
@@ -179,12 +237,20 @@ class KernelElementsTests(unittest.TestCase):
         displayed = output.getvalue()
         self.assertIn("T = t^(1/16)", displayed)
         self.assertIn("u is a primitive 16-th root of unity", displayed)
-        self.assertIn("Integral power in Z[u][T]:", displayed)
+        self.assertIn("Integral power modulo (xi_2-1)^3 in Z[u][T]:", displayed)
+        self.assertIn("Coefficient modulus: 2^3 = 8.", displayed)
+        self.assertIn("xi_2 = u^8", displayed)
         self.assertIn("T^16 = t", displayed)
-        self.assertNotIn("Z[u][T]/", displayed)
+        self.assertIn("T is a free polynomial variable", displayed)
         self.assertIn("tilde(x_2)^(2^2) =", displayed)
         self.assertNotIn("tilde(x_1)", displayed)
         self.assertIn(str(NAMESPACE["integral_power"](level, 2, roots[2])), displayed)
+        odd_level = FiniteLevel(3, 2, 2)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            NAMESPACE["print_integral_power"](odd_level, 1, odd_level.Y ** 3)
+        self.assertIn("modulo (xi_3-1)^2", output.getvalue())
+        self.assertIn("xi_3 = u^9", output.getvalue())
 
     def test_successful_jump_and_level_transport(self):
         level, roots = self.tower()

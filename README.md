@@ -130,18 +130,25 @@ The script prints these roots in the readable $(e,t)$ notation, where
 
   
 
-## Exact integral powers
+## Integral powers at finite precision
 
-Whenever the current solution $`x_n`$ is displayed, the program also automatically
-computes and displays $`\widetilde{x}_n^{p^n}`$ in characteristic zero, including
-when displaying a cached tower or browsing other solutions. Earlier roots in
-the tower retain their existing $`(e,t)`$ display; the integral power is shown
-for the current (deepest) root.
+Whenever the current solution $`x_n`$ is displayed, the program automatically
+computes and displays
+
+```math
+\widetilde{x}_n^{p^n}\pmod{(\xi_p-1)^{n+1}}.
+```
+
+This also applies when displaying a cached tower or browsing other solutions.
+Earlier roots in the tower retain their existing $`(e,t)`$ display; the integral
+power is shown for the current (deepest) root. Here $`n`$ is that root's index,
+including after a Frobenius jump.
 
 The integral notation is:
 
-- $`T=t^{1/p^M}`$, so $`T^{p^M}=t`$.
-- $`u=\zeta_{p^{L+1}}`$, a primitive $`p^{L+1}`$-st root of unity.
+- $`T=t^{1/p^M}`$, so $`T^{p^M}=t`$. The variable $`T`$ remains free.
+- $`u=\xi_{p^{L+1}}`$, a primitive $`p^{L+1}`$-st root of unity.
+- $`\xi_p=u^{p^L}`$, so the coefficient modulus is $`(u^{p^L}-1)^{n+1}`$.
 
 For the unique reduced representative
 
@@ -149,7 +156,7 @@ For the unique reduced representative
 x_n = \sum_{\substack{0 \le i < p^L \\ 0 \le j < p^M}} c_{ij}a^iY^j,
 ```
 
-choose integer coefficients $`\widetilde{c}_{ij}\in\{0,\ldots,p-1\}`$ and form:
+choose integer coefficients $`\widetilde{c}_{ij}\in\{0,\ldots,p-1\}`$ and define
 
 ```math
 \widetilde{x}_n = \sum_{i,j}\widetilde{c}_{ij}(u-1)^i(T-1)^j
@@ -157,22 +164,36 @@ choose integer coefficients $`\widetilde{c}_{ij}\in\{0,\ldots,p-1\}`$ and form:
 \mathbb{Z}[u][T].
 ```
 
-Here $`\mathbb{Z}[u]=\mathbb{Z}[U]/(\Phi_{p^{L+1}}(U))`$. The coefficients are
-reduced using the cyclotomic relation. The variable $`T`$ remains free,
-so terms such as $`T^{p^M}-1=t-1`$ remain visible.
+The power is computed directly in the coefficient quotient
 
-The computation uses the stored $`(a,Y)`$ representative, before any
+```math
+\left(
+\mathbb{Z}[u]\big/\bigl((u^{p^L}-1)^{n+1}\bigr)
+\right)[T],
+\qquad
+\mathbb{Z}[u]=\mathbb{Z}[U]/(\Phi_{p^{L+1}}(U)).
+```
+
+Coefficients are reduced during lifting, multiplication, and exponentiation.
+The printed polynomial represents the residue class; the full exact power
+with potentially large integer coefficients is not computed first.
+
+For $`p=2`$, we have $`\xi_2-1=-2`$, so this is exactly reduction modulo
+$`2^{n+1}`$. For example, the power of $`x_2`$ is computed modulo $`8`$.
+For odd primes the actual ideal $`(\xi_p-1)^{n+1}`$ is used, rather than
+replacing it by $`p^{n+1}`$.
+
+The computation uses the stored $`(a,Y)`$ representative, before the
 Frobenius simplifications in characteristic $`p`$ used in the $`(e,t)`$ display.
-All binomial cross terms and all powers of $`T`$ are retained in the
-integral output. The finite search still uses its original quotient rings.
+No relation $`T^{p^M}=1`$ is imposed in the integral calculation, so terms
+such as $`T^{p^M}-1=t-1`$ remain visible.
 
-This is a specified integral lift and a finite-stage sharp-map approximation.
-Changing the lift convention can change the exact finite-stage power.
-The degree of the power is $`p^n\deg(\widetilde{x}_n)`$ for a nonzero lift,
-so the result can have many terms and large integer coefficients at higher
-levels. The integral ring is constructed only when needed, and the last
-power is kept in memory for repeated display; existing on-disk caches
-continue to store the computations in characteristic $`p`$.
+This is a finite-stage sharp-map approximation at the specified precision.
+The degree is at most $`p^n\deg(\widetilde{x}_n)`$ for a nonzero lift, so
+higher levels can still produce long polynomials despite bounded coefficient
+precision. The coefficient ring is constructed only when needed, and the last
+power is kept in memory for repeated display. The finite search and its
+existing on-disk matrix and root caches retain their original formats.
 
 ---
 

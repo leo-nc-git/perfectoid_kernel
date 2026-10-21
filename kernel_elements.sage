@@ -688,28 +688,58 @@ def element_in_t_e(level, x):
     return " + ".join(terms)
 
 
-def integral_lift_ring(level):
-    """Return Z[u][T], with u a primitive p^(L+1)-st root and T free."""
-    if not hasattr(level, "_integral_lift_ring"):
-        U = PolynomialRing(ZZ, "u_polynomial")
-        order = level.p ** (level.L + 1)
+def integral_lift_ring(level, n=None):
+    """Return Z[u][T], or its coefficient quotient modulo (xi_p-1)^(n+1).
+
+    T stays free. Omitting n retains the exact ring for inspecting a lift.
+    """
+    order = level.p ** (level.L + 1)
+    if n is None:
+        if not hasattr(level, "_integral_lift_ring"):
+            U = PolynomialRing(ZZ, "u_polynomial")
+            coefficients = U.quotient(U.cyclotomic_polynomial(order), names="u")
+            level._integral_lift_ring = PolynomialRing(coefficients, "T")
+        return level._integral_lift_ring
+
+    n = Integer(n)
+    if n < 1:
+        raise ValueError("Need n >= 1 for an integral root power.")
+    previous = getattr(level, "_integral_modular_ring", None)
+    if previous is not None and previous[0] == n:
+        return previous[1]
+
+    precision = n + 1
+    if level.p == 2:
+        # xi_2-1 = -2, so the ideal is exactly (2^(n+1)).
+        U = PolynomialRing(Zmod(2 ** precision), "u_polynomial")
         coefficients = U.quotient(U.cyclotomic_polynomial(order), names="u")
-        level._integral_lift_ring = PolynomialRing(coefficients, "T")
-    return level._integral_lift_ring
+    else:
+        # Sage's multivariate implementation supports reduction by both
+        # generators of this ideal, even though there is only one variable.
+        U = PolynomialRing(ZZ, 1, names=("u_polynomial",), order="lex")
+        z = U.gen()
+        ramification = level.p ** level.L
+        cyclotomic = sum(z ** (j * ramification) for j in range(level.p))
+        modulus = (z ** ramification - 1) ** precision
+        coefficients = U.quotient(U.ideal(cyclotomic, modulus), names=("u",))
+    ring = PolynomialRing(coefficients, "T")
+    level._integral_modular_ring = (n, ring)
+    return ring
 
 
-def integral_lift(level, x):
+def integral_lift(level, x, n=None):
     """Lift the reduced (a,Y) representative using coefficients 0,...,p-1.
 
-    Substitute a -> u-1 and Y -> T-1 in characteristic zero. In particular,
+    Substitute a -> u-1 and Y -> T-1 using integral arithmetic. In particular,
     do not use the Frobenius simplifications in the readable (e,t) display.
     Keep T as a free polynomial variable, so T^(p^M)=t is retained.
+    If n is supplied, reduce coefficients modulo (xi_p-1)^(n+1) throughout.
     This representative convention is a section of reduction, not a ring map.
     """
     if parent(x) != level.A:
         raise ValueError("The element belongs to the wrong finite-level ring.")
 
-    ring = integral_lift_ring(level)
+    ring = integral_lift_ring(level, n)
     coefficients = ring.base_ring()
     u_minus_one = coefficients.gen() - 1
     T_minus_one = ring.gen() - 1
@@ -723,7 +753,7 @@ def integral_lift(level, x):
 
 
 def integral_power(level, n, x):
-    """Compute tilde(x_n)^(p^n) exactly, retaining the last result for redisplay."""
+    """Compute tilde(x_n)^(p^n) modulo (xi_p-1)^(n+1) during arithmetic."""
     n = Integer(n)
     if n < 1:
         raise ValueError("Need n >= 1 for an integral root power.")
@@ -732,16 +762,20 @@ def integral_power(level, n, x):
     previous = getattr(level, "_last_integral_power", None)
     if previous is not None and previous[0] == n and previous[1] == x:
         return previous[2]
-    result = integral_lift(level, x) ** (level.p ** n)
+    result = integral_lift(level, x, n=n) ** (level.p ** n)
     level._last_integral_power = (n, x, result)
     return result
 
 
 def print_integral_power(level, n, x):
-    """Display the exact integral power of the current root, with its notation."""
-    print("Integral power in Z[u][T]:")
+    """Display the integral power at precision (xi_p-1)^(n+1), with T free."""
+    print("Integral power modulo (xi_%s-1)^%s in Z[u][T]:" % (level.p, n + 1))
+    if level.p == 2:
+        print("Coefficient modulus: 2^%s = %s." % (n + 1, 2 ** (n + 1)))
     print("Here T = t^(1/%s), so T^%s = t; u is a primitive %s-th root of unity."
           % (level.N, level.N, level.p ** (level.L + 1)))
+    print("Here xi_%s = u^%s; T is a free polynomial variable."
+          % (level.p, level.p ** level.L))
     print("Lift convention: coefficients 0,...,%s, a -> u-1, Y -> T-1."
           % (level.p - 1))
     print("tilde(x_%s)^(%s^%s) =" % (n, level.p, n), end=" ", flush=True)
